@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace SharpWebServer
 {
@@ -12,12 +14,10 @@ namespace SharpWebServer
     /// </summary>
     public static class Server
     {
-        private static HttpListener _listener;
+        private static readonly int _maxSimultaneousConnections = 20;
 
-        private static Semaphore sem = new(MaxSimultaneousConnections,
-            MaxSimultaneousConnections);
-
-        public static int MaxSimultaneousConnections { get; } = 20;
+        private static readonly Semaphore _semaphore = new(_maxSimultaneousConnections,
+            _maxSimultaneousConnections);
 
 
         /// <summary>
@@ -29,9 +29,11 @@ namespace SharpWebServer
             IPHostEntry host;
             host = Dns.GetHostEntry(Dns.GetHostName());
 
-            return host.AddressList
+            var ret = host.AddressList
                 .Where(ip => ip.AddressFamily == AddressFamily.InterNetwork)
                 .ToList();
+
+            return ret;
         }
 
         /// <summary>
@@ -42,16 +44,79 @@ namespace SharpWebServer
         private static HttpListener InitializeHttpListener(List<IPAddress> localhostIpAddresses)
         {
             var listener = new HttpListener();
-            listener.Prefixes.Add("http://localhost/");
-
+            listener.Prefixes.Add("http://localhost:9898/");
             // Listen to IP addresses
             localhostIpAddresses.ForEach(ip =>
             {
-                Console.WriteLine("Listening on IP " + "http://" + ip + "/");
-                listener.Prefixes.Add("http://" + ip + "/");
+                Console.WriteLine("Listening on IP " + "http://" + ip + ":9898" + "/");
+                listener.Prefixes.Add("http://" + ip + ":9898" + "/");
             });
 
             return listener;
+        }
+
+        /// <summary>
+        ///     Await connections.
+        /// </summary>
+        /// <param name="listener">Initialized HTTP listener</param>
+        private static async void StartConnectionListener(HttpListener listener)
+        {
+            // Wait for a connection.
+            var context = await listener.GetContextAsync();
+
+            // Release the semaphore.
+            _semaphore.Release();
+            Log(context.Request);
+
+            // Response content
+            var response =
+                "<html><head><meta http-equiv='content-type' content='text/html; charset=utf-8'/></head>Hello Browser!</html>";
+            var encoded = Encoding.UTF8.GetBytes(response);
+            context.Response.ContentLength64 = encoded.Length;
+            context.Response.OutputStream.Write(encoded, 0, encoded.Length);
+            context.Response.OutputStream.Close();
+        }
+
+
+        public static void Log(HttpListenerRequest request)
+        {
+            Console.WriteLine(request.RemoteEndPoint + " " + request.HttpMethod + "/" +
+                              request.Url?.AbsoluteUri);
+        }
+
+        /// <summary>
+        ///     Start awaiting for connections
+        ///     Has to run in separate thread.
+        /// </summary>
+        /// <param name="listener">Initialized HTTP listener</param>
+        private static void RunServer(HttpListener listener)
+        {
+            while (true)
+            {
+                _semaphore.WaitOne();
+                StartConnectionListener(listener);
+            }
+        }
+
+        /// <summary>
+        ///     Listens to connections
+        /// </summary>
+        /// <param name="listener" Initialized HTTP listener></param>
+        private static void Start(HttpListener listener)
+        {
+            listener.Start();
+            Task.Run(() => RunServer(listener));
+        }
+
+
+        /// <summary>
+        ///     Starts the web server.
+        /// </summary>
+        public static void Start()
+        {
+            var localhostIpAddresses = GetLocalHostIPs();
+            var listener = InitializeHttpListener(localhostIpAddresses);
+            Start(listener);
         }
     }
 }
