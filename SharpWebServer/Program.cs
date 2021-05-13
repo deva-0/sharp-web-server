@@ -6,7 +6,7 @@ namespace SharpWebServer
     {
         static void Main(string[] args)
         {
-            Console.WriteLine("Hello World!");
+            
         }
     }
 }
